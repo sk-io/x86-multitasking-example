@@ -1,4 +1,6 @@
 
+; ----- GDT / TSS -----
+
 global flush_gdt
 flush_gdt:
     mov eax, [esp + 4]

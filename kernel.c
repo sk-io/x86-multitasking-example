@@ -1,6 +1,6 @@
 #include "defs.h"
 
-// ----- GDT -----
+// ----- GDT / TSS -----
 
 GDTEntry gdt_entries[NUM_GDT_ENTRIES];
 GDTPointer gdt_pointer;
@@ -24,8 +24,6 @@ void setup_gdt() {
 
     memset((uint8_t*) &tss, 0, sizeof(tss));
     tss.ss0 = GDT_KERNEL_DATA;
-    tss.cs = GDT_KERNEL_CODE | DPL_USER;
-    tss.ss = tss.ds = tss.es = tss.fs = tss.gs = GDT_KERNEL_DATA | DPL_USER;
 
     set_gdt_entry(0, 0, 0, 0, 0);                // 0x00: null
     set_gdt_entry(1, 0, 0xFFFFFFFF, 0x9A, 0xCF); // 0x08: kernel text
@@ -132,9 +130,6 @@ Task tasks[MAX_TASKS];
 int num_tasks;
 Task* current_task;
 
-// void forkret() {
-// }
-
 void create_task(uint32_t id, uint32_t eip, uint32_t user_stack, uint32_t kernel_stack, bool kernel_task) {
     num_tasks++;
     
@@ -158,16 +153,13 @@ void create_task(uint32_t id, uint32_t eip, uint32_t user_stack, uint32_t kernel
     trap->eflags = 0x200; // enable interrupts
     trap->eip = eip;
 
-    // kesp -= 4;
-    // *(uint32_t*) kesp = (uint32_t) isr_exit;
-
     kesp -= sizeof(TaskReturnContext);
     TaskReturnContext* context = (TaskReturnContext*) kesp;
     context->edi = 0;
     context->esi = 0;
     context->ebx = 0;
     context->ebp = 0;
-    context->eip = (uint32_t) isr_exit; // forkret
+    context->eip = (uint32_t) isr_exit;
 
 
     tasks[id].kesp0 = kernel_stack;
@@ -195,7 +187,6 @@ void schedule() {
 
     // update tss
     tss.esp0 = next->kesp0;
-    tss.ss0 = GDT_KERNEL_DATA;
 
     // switch context, may not return here
     switch_context(old, next);
