@@ -8,26 +8,27 @@ SOURCES_C = $(patsubst %.c, %.o, $(wildcard *.c))
 SOURCES_ASM = $(patsubst %.asm, %.o, $(wildcard *.asm))
 
 OBJ = $(SOURCES_ASM) $(SOURCES_C)
+BINARY = kernel.bin
 
-all: $(OBJ) link
+all: $(BINARY)
 
-link:
-	$(LD) $(LDFLAGS) -o kernel.bin $(OBJ)
+$(BINARY): $(OBJ)
+	$(LD) $(LDFLAGS) -o $(BINARY) $(OBJ)
 
-%.o:%.c
+%.o: %.c
 	$(CC) $(CFLAGS) $< -o $@
 
-%.o:%.asm
+%.o: %.asm
 	nasm $(ASFLAGS) $< -o $@
 
 run: all
-	qemu-system-i386 -kernel kernel.bin
+	qemu-system-i386 -kernel $(BINARY)
 
 drun: all
-	qemu-system-i386 -s -S -kernel kernel.bin
+	qemu-system-i386 -s -S -kernel $(BINARY)
 
 debug:
-	gdb --symbols=kernel.bin -ex 'target remote localhost:1234'
+	gdb --symbols=$(BINARY) -ex 'target remote localhost:1234'
 
 clean:
-	rm -f *.o kernel.bin
+	rm -f *.o $(BINARY)

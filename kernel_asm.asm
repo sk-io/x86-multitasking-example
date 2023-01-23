@@ -12,8 +12,9 @@ flush_gdt:
     mov fs, ax
     mov gs, ax
     mov ss, ax
-    jmp 0x08:.flush
-.flush:
+
+    jmp 0x08:.load_cs
+.load_cs:
     ret
 
 global flush_tss
@@ -25,7 +26,7 @@ flush_tss:
 ; ----- Interrupts -----
 
 isr_common:
-    ; push registers to match struct RegisterState (in reverse order)
+    ; push registers to match struct TrapFrame (in reverse order)
     pushad
     push ds
     push es

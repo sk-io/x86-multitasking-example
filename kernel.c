@@ -26,10 +26,10 @@ void setup_gdt() {
     tss.ss0 = GDT_KERNEL_DATA;
 
     set_gdt_entry(0, 0, 0, 0, 0);                // 0x00: null
-    set_gdt_entry(1, 0, 0xFFFFFFFF, 0x9A, 0xCF); // 0x08: kernel text
-    set_gdt_entry(2, 0, 0xFFFFFFFF, 0x92, 0xCF); // 0x10: kernel data
-    set_gdt_entry(3, 0, 0xFFFFFFFF, 0xFA, 0xCF); // 0x18: User mode code segment
-    set_gdt_entry(4, 0, 0xFFFFFFFF, 0xF2, 0xCF); // 0x20: User mode data segment
+    set_gdt_entry(1, 0, 0xFFFFFFFF, 0x9A, 0xC0); // 0x08: kernel text
+    set_gdt_entry(2, 0, 0xFFFFFFFF, 0x92, 0xC0); // 0x10: kernel data
+    set_gdt_entry(3, 0, 0xFFFFFFFF, 0xFA, 0xC0); // 0x18: User mode code segment
+    set_gdt_entry(4, 0, 0xFFFFFFFF, 0xF2, 0xC0); // 0x20: User mode data segment
     set_gdt_entry(5, (uint32_t) &tss, sizeof(tss), 0x89, 0x40); // 0x28: tss
 
     flush_gdt((uint32_t) &gdt_pointer);
@@ -38,7 +38,7 @@ void setup_gdt() {
 
 // ----- Interrupts -----
 
-IDTEntry idt[256] __attribute__((aligned(0x10)));
+IDTEntry idt[256] __attribute__((aligned(16)));
 IDTPointer idt_pointer;
 
 void set_idt_entry(uint8_t vector, void* isr, uint8_t attributes) {
@@ -113,8 +113,8 @@ void setup_timer(uint32_t frequency) {
 
     outb(0x43, 0x36);
 
-    uint8_t l = (uint8_t)(divisor & 0xFF);
-    uint8_t h = (uint8_t)(divisor >> 8 & 0xFF);
+    uint8_t l = (uint8_t) (divisor & 0xFF);
+    uint8_t h = (uint8_t) (divisor >> 8 & 0xFF);
 
     outb(0x40, l);
     outb(0x40, h);
@@ -160,7 +160,6 @@ void create_task(uint32_t id, uint32_t eip, uint32_t user_stack, uint32_t kernel
     context->ebx = 0;
     context->ebp = 0;
     context->eip = (uint32_t) isr_exit;
-
 
     tasks[id].kesp0 = kernel_stack;
     tasks[id].kesp = (uint32_t) kesp;
