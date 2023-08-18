@@ -26,10 +26,10 @@ void setup_gdt() {
     tss.ss0 = GDT_KERNEL_DATA;
 
     set_gdt_entry(0, 0, 0, 0, 0);                // 0x00: null
-    set_gdt_entry(1, 0, 0xFFFFFFFF, 0x9A, 0xC0); // 0x08: kernel text
-    set_gdt_entry(2, 0, 0xFFFFFFFF, 0x92, 0xC0); // 0x10: kernel data
-    set_gdt_entry(3, 0, 0xFFFFFFFF, 0xFA, 0xC0); // 0x18: User mode code segment
-    set_gdt_entry(4, 0, 0xFFFFFFFF, 0xF2, 0xC0); // 0x20: User mode data segment
+    set_gdt_entry(1, 0, 0xFFFFFFFF, 0x9A, 0xC0); // 0x08: kernel mode text
+    set_gdt_entry(2, 0, 0xFFFFFFFF, 0x92, 0xC0); // 0x10: kernel mode data
+    set_gdt_entry(3, 0, 0xFFFFFFFF, 0xFA, 0xC0); // 0x18: user mode code segment
+    set_gdt_entry(4, 0, 0xFFFFFFFF, 0xF2, 0xC0); // 0x20: user mode data segment
     set_gdt_entry(5, (uint32_t) &tss, sizeof(tss), 0x89, 0x40); // 0x28: tss
 
     flush_gdt((uint32_t) &gdt_pointer);
@@ -43,14 +43,15 @@ IDTPointer idt_pointer;
 
 void set_idt_entry(uint8_t vector, void* isr, uint8_t attributes) {
     idt[vector].isr_low    = (uint32_t) isr & 0xFFFF;
-    idt[vector].kernel_cs  = GDT_KERNEL_CODE;
+    idt[vector].segment_selector = GDT_KERNEL_CODE; // we only want to run interrupts in kernel mode
     idt[vector].reserved   = 0;
     idt[vector].attributes = attributes;
     idt[vector].isr_high   = (uint32_t) isr >> 16;
 }
 
+// send commands to PIC to remap IRQs from 0-15 to 32-47
+// so as not to interfere with CPU exception interrupts.
 void remap_pic() {
-    // send commands to PIC to remap IRQs
     outb(0x20, 0x11);
     outb(0xA0, 0x11);
     outb(0x21, 0x20);
@@ -63,28 +64,38 @@ void remap_pic() {
     outb(0xA1, 0x00);
 }
 
+// in kernel_asm.asm
 extern void* isr_redirect_table[];
 extern void isr128();
 
 void setup_interrupts() {
-    memset((uint8_t*) &idt, 0, sizeof(IDTEntry) * 256);
-
-    idt_pointer.limit = sizeof(IDTEntry) * 256 - 1;
-    idt_pointer.base  = (uint32_t) &idt;
-
     remap_pic();
 
+    // clear IDT
+    memset((uint8_t*) &idt, 0, sizeof(IDTEntry) * 256);
+
+    // all our gate types are "32-bit Interrupt Gates"
+    // meaning interrupts are disabled when we enter a handler.
+
+    // use our redirect table defined in asm
     for (int i = 0; i < 48; i++) {
         set_idt_entry(i, isr_redirect_table[i], 0x8E);
     }
     set_idt_entry(0x80, isr128, 0xEE); // syscalls have DPL 3
 
+    // pass IDT to the CPU
+    idt_pointer.limit = sizeof(IDTEntry) * 256 - 1;
+    idt_pointer.base  = (uint32_t) &idt;
     asm volatile ("lidt %0" :: "m"(idt_pointer));
 }
 
+// interrupts are disabled in here
+// so we can't get interrupted whilst servicing another interrupt
 void handle_interrupt(TrapFrame regs) {
-    *((uint16_t*) 0xB8000 + regs.interrupt) = 0xF100 | 'G';
+    // print some garbage to the screen
+    *(VGA_MEMORY + regs.interrupt) = 0xF100 | 'G';
 
+    // check if this is a PIT interrupt
     if (regs.interrupt >= 32 && regs.interrupt <= 47) {
         // acknowledge IRQ
         if (regs.interrupt >= 40) {
@@ -100,7 +111,7 @@ void handle_interrupt(TrapFrame regs) {
     if (regs.interrupt == 0x80) {
         // syscall
 
-        *((uint16_t*) 0xB8000 + 80 * 2 + regs.eax) = 0xB000 | 'S';
+        *(VGA_MEMORY + 80 * 2 + regs.eax) = 0xB000 | 'S';
     }
 }
 
@@ -132,8 +143,10 @@ Task* current_task;
 
 void create_task(uint32_t id, uint32_t eip, uint32_t user_stack, uint32_t kernel_stack, bool kernel_task) {
     num_tasks++;
-    
-    // setup initial kernel stack
+
+    // when a task gets context switched to for the first time,
+    // switch_context is going to start popping values from the stack into registers,
+    // so we need to set up a predictable stack frame for that
 
     uint8_t* kesp = (uint8_t*) kernel_stack;
     
@@ -141,8 +154,8 @@ void create_task(uint32_t id, uint32_t eip, uint32_t user_stack, uint32_t kernel
     TrapFrame* trap = (TrapFrame*) kesp;
     memset((uint8_t*) trap, 0, sizeof(TrapFrame));
 
-    uint32_t code_selector = kernel_task ? GDT_KERNEL_CODE : (GDT_USER_CODE | DPL_USER);
-    uint32_t data_selector = kernel_task ? GDT_KERNEL_DATA : (GDT_USER_DATA | DPL_USER);
+    uint32_t code_selector = kernel_task ? GDT_KERNEL_CODE : (GDT_USER_CODE | RPL_USER);
+    uint32_t data_selector = kernel_task ? GDT_KERNEL_DATA : (GDT_USER_DATA | RPL_USER);
 
     trap->cs = code_selector;
     trap->ds = data_selector;
@@ -159,9 +172,12 @@ void create_task(uint32_t id, uint32_t eip, uint32_t user_stack, uint32_t kernel
     context->esi = 0;
     context->ebx = 0;
     context->ebp = 0;
-    context->eip = (uint32_t) isr_exit;
 
-    tasks[id].kesp0 = kernel_stack;
+    // this location gets read when returning from switch_context on a newly created task,
+    // instead of going back through a bunch of functions we just jump directly to isr_exit and exit the interrupt
+    context->return_eip = (uint32_t) isr_exit;
+
+    tasks[id].kesp_bottom = kernel_stack;
     tasks[id].kesp = (uint32_t) kesp;
     tasks[id].id = id;
 }
@@ -185,7 +201,7 @@ void schedule() {
     current_task = next;
 
     // update tss
-    tss.esp0 = next->kesp0;
+    tss.esp0 = next->kesp_bottom;
 
     // switch context, may not return here
     switch_context(old, next);
@@ -201,7 +217,7 @@ void task1() {
     // there's no memory protection so we can write directly to vga buffer
     // (just to show that it's still running)
     uint8_t a = 0;
-    while (true) *((uint16_t*) 0xB8000 + 495) = 0xF200 | a++;
+    while (true) *(VGA_MEMORY + 495) = 0xF200 | a++;
 }
 
 void task2() {
@@ -211,7 +227,7 @@ void task2() {
     );
 
     uint8_t a = 0;
-    while (true) *((uint16_t*) 0xB8000 + 496) = 0xF300 | a++;
+    while (true) *(VGA_MEMORY + 496) = 0xF300 | a++;
 }
 
 void task3() {
@@ -221,7 +237,7 @@ void task3() {
     );
 
     uint8_t a = 0;
-    while (true) *((uint16_t*) 0xB8000 + 497) = 0xF400 | a++;
+    while (true) *(VGA_MEMORY + 497) = 0xF400 | a++;
 }
 
 void kernel_main() {
@@ -244,7 +260,7 @@ void kernel_main() {
     // kernel / idle thread
     uint8_t a = 0;
     while (true) {
-        *((uint16_t*) 0xB8000 + 494) = 0xFA00 | a++;
+        *(VGA_MEMORY + 494) = 0xFA00 | a++;
         halt();
     }
 }

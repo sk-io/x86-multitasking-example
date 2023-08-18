@@ -25,6 +25,7 @@ flush_tss:
 
 ; ----- Interrupts -----
 
+; gets called for ALL interrupts
 isr_common:
     ; push registers to match struct TrapFrame (in reverse order)
     pushad
@@ -45,7 +46,7 @@ isr_common:
     extern handle_interrupt
     call handle_interrupt
 
-    ; fall through
+    ; fall through here
 
 global isr_exit
 isr_exit:           ; used for newly created tasks in order to skip having to build the entire return stack
@@ -56,6 +57,8 @@ isr_exit:           ; used for newly created tasks in order to skip having to bu
     popad
     add esp, 8      ; pop error code and interrupt number
     iret            ; pops (CS, EIP, EFLAGS) and also (SS, ESP) if privilege change occurs
+
+; generate isr stubs that jump to isr_common, in order to get a consistent stack frame
 
 %macro ISR_ERROR_CODE 1
 global isr%1
@@ -142,6 +145,8 @@ extern current_task
 extern tss
 
 ; void switch_context(Task* old, Task* new);
+; pushes register state onto old tasks kernel stack (the one we're in right now) and
+; pops the new state, making sure to update the kesps
 global switch_context
 switch_context:
     mov eax, [esp + 4] ; eax = old

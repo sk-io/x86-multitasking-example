@@ -10,9 +10,13 @@
 #define GDT_USER_DATA   0x20
 #define GDT_TSS         0x28
 
-#define DPL_USER 3
+// "requested privilage level"
+#define RPL_USER 3
 
+// fixed number of tasks for simplicity
 #define MAX_TASKS 16
+
+#define VGA_MEMORY ((uint16_t*) 0xB8000)
 
 typedef struct {
     uint16_t limit_low;
@@ -46,15 +50,15 @@ typedef struct {
     uint16_t gs, __gs_unused;
     uint16_t ldt_selector, __ldt_sel_unused;
     uint16_t debug_flag, io_map;
-} __attribute__ ((packed)) TSS;
+} __attribute__ ((packed)) TSS; // https://wiki.osdev.org/TSS
 
 typedef struct {
-    uint16_t isr_low;
-    uint16_t kernel_cs;
+    uint16_t isr_low; // ISR(interrupt service routine) address
+    uint16_t segment_selector; // what to load into CS register? + privilege level
     uint8_t  reserved;
-    uint8_t  attributes;
+    uint8_t  attributes; // bits 40-47: gate type, DPL(desired privilege level, ignored for hw ints), present bit
     uint16_t isr_high;
-} __attribute__((packed)) IDTEntry;
+} __attribute__((packed)) IDTEntry; // 32bit, aka "Gate Descriptor"
 
 typedef struct {
     uint16_t limit;
@@ -78,18 +82,28 @@ typedef struct {
     uint32_t esi;
     uint32_t ebx;
     uint32_t ebp;
-    uint32_t eip;
+    uint32_t return_eip;
 } TaskReturnContext;
 
 typedef struct {
     uint32_t id;
 
-    // kernel stack
-    uint32_t kesp;
-    uint32_t kesp0; // start of kernel stack. copied to TSS, unused in kernel threads?
+    // each task has its own kernel stack
+    //  this stack gets loaded on interrupts
+    //  when context switching between two tasks,
+    //  this stack is used to store the state of the registers etc.
 
-    // page directory
-    uint32_t cr3;
+    // we could also have stored them here though
+
+    // kernel stack pointer, updated when switching contexts
+    //  to switch to this task, we load this into esp and pop the state
+    uint32_t kesp;
+    
+    // bottom(highest address) of kernel stack
+    //  esp gets set to this via the TSS when transitioning from user to kernel mode on interrupts,
+    //  so we set it to the bottom of this task's kernel stack address to get an empty stack.
+    //  this is only used in user tasks.
+    uint32_t kesp_bottom;
 } Task;
 
 extern TSS tss;
