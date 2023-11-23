@@ -128,8 +128,8 @@ ISR_NO_ERROR_CODE 46
 ISR_NO_ERROR_CODE 47
 
 ; syscall 0x80
-ISR_NO_ERROR_CODE 128
 global isr128
+ISR_NO_ERROR_CODE 128
 
 global isr_redirect_table
 isr_redirect_table:

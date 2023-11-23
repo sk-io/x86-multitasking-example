@@ -1,4 +1,4 @@
-CC = i686-elf-gcc
+CC = i686-elf-gcc # you can use clang too if you dont want to build your own cross compiler
 LD = i686-elf-ld
 CFLAGS = -g -nostdlib -ffreestanding -m32 -c -Wall -Wextra
 LDFLAGS = -g -Tlinker.ld -m elf_i386
