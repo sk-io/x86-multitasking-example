@@ -136,18 +136,22 @@ Task tasks[MAX_TASKS];
 int num_tasks;
 Task* current_task;
 
-void create_task(uint32_t id, uint32_t eip, uint32_t user_stack, uint32_t kernel_stack, bool kernel_task) {
+// you can also create "kernel tasks" running in kernel space
+// they dont need a user stack, instead using its kernel stack for both program code and interrupts
+void create_task(uint32_t id, uint32_t eip, uint32_t user_stack, uint32_t kernel_stack, bool is_kernel_task) {
 	num_tasks++;
 
-	// we can pass things to the task by pushing to its user stack
-	// with cdecl, this will pass it as arguments
-	user_stack -= 4;
-	*(uint32_t*) user_stack = id; // first arg to task func
-	user_stack -= 4;
-	*(uint32_t*) user_stack = 0; // task func return address, shouldnt be used
+	if (!is_kernel_task) {
+		// we can pass things to the task by pushing to its user stack
+		// with cdecl, this will pass it as arguments
+		user_stack -= 4;
+		*(uint32_t*) user_stack = id; // first arg to task func
+		user_stack -= 4;
+		*(uint32_t*) user_stack = 0; // task func return address, shouldnt be used
+	}
 
-	uint32_t code_selector = kernel_task ? GDT_KERNEL_CODE : (GDT_USER_CODE | RPL_USER);
-	uint32_t data_selector = kernel_task ? GDT_KERNEL_DATA : (GDT_USER_DATA | RPL_USER);
+	uint32_t code_selector = is_kernel_task ? GDT_KERNEL_CODE : (GDT_USER_CODE | RPL_USER);
+	uint32_t data_selector = is_kernel_task ? GDT_KERNEL_DATA : (GDT_USER_DATA | RPL_USER);
 
 	uint8_t* kesp = (uint8_t*) kernel_stack;
 
@@ -165,7 +169,9 @@ void create_task(uint32_t id, uint32_t eip, uint32_t user_stack, uint32_t kernel
 	stack->eip = eip;
 	stack->cs = code_selector;
 	stack->eflags = 0x200; // enable interrupts
-	stack->usermode_esp = user_stack;
+
+	// FIXME: we shouldnt actually push these if its a kernel task cause iret wont pop them off
+	stack->usermode_esp = user_stack; 
 	stack->usermode_ss = data_selector;
 
 	tasks[id].kesp_bottom = kernel_stack;
@@ -192,13 +198,14 @@ void schedule() {
 	current_task = next;
 
 	// update tss, esp will be set to this when an interrupt happens
-	// (only when going from user to kernel though)
+	// (only when a privilege change happens though, so not for kernel tasks)
 	tss.esp0 = next->kesp_bottom;
 
 	// switch context, doesn't return here for newly created tasks
 	switch_context(old, next);
 }
 
+// FIXME: cant pass args to kernel tasks
 static void task_entry(uint32_t id) {
 	// do a software interrupt
 	asm("int $0x80" :: "a"(id));
