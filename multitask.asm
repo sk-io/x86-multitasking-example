@@ -1,8 +1,44 @@
+; ----- Multiboot Header -----
 
-; ----- GDT / TSS -----
+section .multiboot
+	MB_MAGIC    equ 0x1BADB002
+	MB_FLAGS    equ 0
+	MB_CHECKSUM equ -(MB_MAGIC + MB_FLAGS)
 
-global flush_gdt
-flush_gdt:
+	dd MB_MAGIC
+	dd MB_FLAGS
+	dd MB_CHECKSUM
+
+; ----- Initial Stack -----
+
+section .bss
+stack_bottom:
+	resb 16384 ; reserve 16 KiB for the initial kernel stack
+stack_top:
+
+; ----- Boot -----
+
+section .text
+global _start
+_start:
+	; interrupts are disabled
+
+	mov esp, stack_top
+
+	; push ebx ; multiboot info pointer, we don't need it though
+
+    extern kernel_main
+	call kernel_main
+ 
+	cli
+.hang:
+	hlt
+	jmp .hang
+
+; ----- GDT -----
+
+global load_gdt
+load_gdt:
     mov eax, [esp + 4]
     lgdt [eax]
 
@@ -13,14 +49,9 @@ flush_gdt:
     mov gs, ax
     mov ss, ax
 
+	; do a long jump to load CS with correct value
     jmp 0x08:.load_cs
 .load_cs:
-    ret
-
-global flush_tss
-flush_tss:
-    mov ax, 0x28
-    ltr ax
     ret
 
 ; ----- Interrupts -----
@@ -46,10 +77,6 @@ isr_common:
     extern handle_interrupt
     call handle_interrupt
 
-    ; fall through here
-
-global isr_exit
-isr_exit:           ; used for newly created tasks in order to skip having to build the entire return stack
     pop gs
     pop fs
     pop es
@@ -141,30 +168,56 @@ isr_redirect_table:
 
 ; ----- Tasks -----
 
-extern current_task
-extern tss
-
-; void switch_context(Task* old, Task* new);
-; pushes register state onto old tasks kernel stack (the one we're in right now) and
-; pops the new state, making sure to update the kesps
+; void switch_context(Task* from, Task* to);
+; swaps stack pointer to next task's kernel stack
 global switch_context
 switch_context:
-    mov eax, [esp + 4] ; eax = old
-    mov edx, [esp + 8] ; edx = new
+    mov eax, [esp + 4] ; eax = from
+    mov edx, [esp + 8] ; edx = to
+	
+	; these are the callee-saved registers on x86 according to cdecl
+	; they will change once we go off and execute the other task
+	; so we need to preserve them for when we get back
+	
+	; think of it from the perspective of the calling function,
+	; it wont notice that we go off and execute some other code
+	; but when we return to it, suddenly the registers it
+	; expected to remain unchanged has changed
+	push ebx
+	push esi
+	push edi
+	push ebp
 
-    ; push registers that arent already saved by cdecl call etc.
-    push ebp
-    push ebx
-    push esi
-    push edi
+    ; swap kernel stack pointer and store them
+    mov [eax + 4], esp ; from->kesp = esp
+    mov esp, [edx + 4] ; esp = to->kesp
+	
+	; NewTaskKernelStack will match the stack from here on out.
 
-    ; swap kernel stack pointer
-    mov [eax + 4], esp ; old->kesp = esp
-    mov esp, [edx + 4] ; esp = new->kesp
+	pop ebp
+	pop edi
+	pop esi
+	pop ebx
 
-    pop edi
-    pop esi
-    pop ebx
-    pop ebp
+    ret ; new tasks hijack the return address to new_task_setup
 
-    ret ; new tasks change the return value using TaskReturnContext.eip
+global new_task_setup
+new_task_setup:
+	; update the segment registers
+	pop ebx
+	mov ds, bx
+	mov es, bx
+	mov fs, bx
+	mov gs, bx
+	
+	; zero out registers so they dont leak to userspace
+	xor eax, eax
+	xor ebx, ebx
+	xor ecx, ecx
+	xor edx, edx
+	xor esi, esi
+	xor edi, edi
+	xor ebp, ebp
+
+	; exit the interrupt, placing us in the real task entry function
+	iret

@@ -1,4 +1,4 @@
-#include "defs.h"
+#include "multitask.h"
 
 // ----- GDT / TSS -----
 
@@ -32,8 +32,9 @@ void setup_gdt() {
     set_gdt_entry(4, 0, 0xFFFFFFFF, 0xF2, 0xC0); // 0x20: user mode data segment
     set_gdt_entry(5, (uint32_t) &tss, sizeof(tss), 0x89, 0x40); // 0x28: tss
 
-    flush_gdt((uint32_t) &gdt_pointer);
-    flush_tss();
+    load_gdt((uint32_t) &gdt_pointer);
+	// load task register with the TSS segment selector 0x28
+	asm("ltr %%ax" :: "a"((uint16_t) GDT_TSS));
 }
 
 // ----- Interrupts -----
@@ -64,7 +65,7 @@ void remap_pic() {
     outb(0xA1, 0x00);
 }
 
-// in kernel_asm.asm
+// defined in multitask.asm
 extern void* isr_redirect_table[];
 extern void isr128();
 
@@ -75,9 +76,8 @@ void setup_interrupts() {
     memset((uint8_t*) &idt, 0, sizeof(IDTEntry) * 256);
 
     // all our gate types are "32-bit Interrupt Gates"
-    // meaning interrupts are disabled when we enter a handler.
+    // meaning interrupts are disabled when we enter the handler
 
-    // use our redirect table defined in asm
     for (int i = 0; i < 48; i++) {
         set_idt_entry(i, isr_redirect_table[i], 0x8E);
     }
@@ -86,14 +86,17 @@ void setup_interrupts() {
     // pass IDT to the CPU
     idt_pointer.limit = sizeof(IDTEntry) * 256 - 1;
     idt_pointer.base  = (uint32_t) &idt;
-    asm volatile ("lidt %0" :: "m"(idt_pointer));
+    asm("lidt %0" :: "m"(idt_pointer));
 }
 
 // interrupts are disabled in here
 // so we can't get interrupted whilst servicing another interrupt
+// unless we enable them again, which we might want to do
+// for lengthy interrupts like file IO syscalls etc.
+// so we don't hog the CPU
 void handle_interrupt(TrapFrame regs) {
     // print some garbage to the screen
-    *(VGA_MEMORY + regs.interrupt) = 0xF100 | 'G';
+    *(VGA_MEMORY + 80 + regs.interrupt) = 0xF100 | 'G';
 
     // check if this is a PIT interrupt
     if (regs.interrupt >= 32 && regs.interrupt <= 47) {
@@ -107,9 +110,9 @@ void handle_interrupt(TrapFrame regs) {
             timer_tick();
         }
     }
-
+ 
     if (regs.interrupt == 0x80) {
-        // syscall
+        // syscall demonstration
 
         *(VGA_MEMORY + 80 * 2 + regs.eax) = 0xB000 | 'S';
     }
@@ -144,38 +147,34 @@ Task* current_task;
 void create_task(uint32_t id, uint32_t eip, uint32_t user_stack, uint32_t kernel_stack, bool kernel_task) {
     num_tasks++;
 
-    // when a task gets context switched to for the first time,
-    // switch_context is going to start popping values from the stack into registers,
-    // so we need to set up a predictable stack frame for that
-
-    uint8_t* kesp = (uint8_t*) kernel_stack;
-    
-    kesp -= sizeof(TrapFrame);
-    TrapFrame* trap = (TrapFrame*) kesp;
-    memset((uint8_t*) trap, 0, sizeof(TrapFrame));
+	// we can pass things to the task by pushing to its user stack
+	// with cdecl, this will pass it as arguments
+	user_stack -= 4;
+	*(uint32_t*) user_stack = id; // first arg to task func
+	user_stack -= 4;
+	*(uint32_t*) user_stack = 0; // task func return address, shouldnt be used
 
     uint32_t code_selector = kernel_task ? GDT_KERNEL_CODE : (GDT_USER_CODE | RPL_USER);
     uint32_t data_selector = kernel_task ? GDT_KERNEL_DATA : (GDT_USER_DATA | RPL_USER);
 
-    trap->cs = code_selector;
-    trap->ds = data_selector;
+    uint8_t* kesp = (uint8_t*) kernel_stack;
 
-    trap->usermode_ss = data_selector;
-    trap->usermode_esp = user_stack;
-
-    trap->eflags = 0x200; // enable interrupts
-    trap->eip = eip;
-
-    kesp -= sizeof(TaskReturnContext);
-    TaskReturnContext* context = (TaskReturnContext*) kesp;
-    context->edi = 0;
-    context->esi = 0;
-    context->ebx = 0;
-    context->ebp = 0;
-
-    // this location gets read when returning from switch_context on a newly created task,
-    // instead of going back through a bunch of functions we just jump directly to isr_exit and exit the interrupt
-    context->return_eip = (uint32_t) isr_exit;
+	// we need to set up the initial kernel stack for this task
+	// this stack will be loaded next time switch_context gets
+	// called for this task
+	// once switch_context switches esp to this stack, the ret
+	// instruction will pop off a return value, so we redirect it
+	// to new_task_setup to init registers and exit the interrupt
+	kesp -= sizeof(NewTaskKernelStack);
+	NewTaskKernelStack* stack = (NewTaskKernelStack*) kesp;
+	stack->ebp = stack->edi = stack->esi = stack->ebx = 0;
+	stack->switch_context_return_addr = (uint32_t) new_task_setup;
+	stack->data_selector = data_selector;
+	stack->eip = eip;
+	stack->cs = code_selector;
+	stack->eflags = 0x200; // enable interrupts
+	stack->usermode_esp = user_stack;
+	stack->usermode_ss = data_selector;
 
     tasks[id].kesp_bottom = kernel_stack;
     tasks[id].kesp = (uint32_t) kesp;
@@ -185,11 +184,11 @@ void create_task(uint32_t id, uint32_t eip, uint32_t user_stack, uint32_t kernel
 void setup_tasks() {
     memset((uint8_t*) tasks, 0, sizeof(Task) * MAX_TASKS);
 
+    // task 0 represents the execution we're in right now
+	// (the kernel/idle thread)
     num_tasks = 1;
     current_task = &tasks[0];
     current_task->id = 0;
-
-    // task 0 represents the execution we're in right now
 }
 
 void schedule() {
@@ -200,44 +199,25 @@ void schedule() {
     Task* old = current_task;
     current_task = next;
 
-    // update tss
+    // update tss, esp will be set to this when an interrupt happens
+	// (only when going from user to kernel though)
     tss.esp0 = next->kesp_bottom;
 
-    // switch context, may not return here
+    // switch context, doesn't return here for newly created tasks
     switch_context(old, next);
 }
 
-void task1() {
+static void task_entry(uint32_t id) {
     // do a software interrupt
-    asm volatile(
-        "mov $3, %eax \n"
-        "int $0x80"
-    );
+    asm("int $0x80" :: "a"(id));
 
     // there's no memory protection so we can write directly to vga buffer
     // (just to show that it's still running)
     uint8_t a = 0;
-    while (true) *(VGA_MEMORY + 495) = 0xF200 | a++;
-}
+    while (true) *(VGA_MEMORY + id) = 0x0A00 | a++;
 
-void task2() {
-    asm volatile(
-        "mov $5, %eax \n"
-        "int $0x80"
-    );
-
-    uint8_t a = 0;
-    while (true) *(VGA_MEMORY + 496) = 0xF300 | a++;
-}
-
-void task3() {
-    asm volatile(
-        "mov $7, %eax \n"
-        "int $0x80"
-    );
-
-    uint8_t a = 0;
-    while (true) *(VGA_MEMORY + 497) = 0xF400 | a++;
+	// IMPORTANT: all tasks need to end in an infinite loop, otherwise
+	// the cpu will just continue executing garbage code from here
 }
 
 void kernel_main() {
@@ -250,9 +230,11 @@ void kernel_main() {
     setup_timer(1000);
     setup_tasks();
 
-    create_task(1, (uint32_t) task1, 0xC80000, 0xC00000, false);
-    create_task(2, (uint32_t) task2, 0xD80000, 0xD00000, false);
-    create_task(3, (uint32_t) task3, 0xE80000, 0xE00000, false);
+	// since theres no allocator, we'll just manually designate
+	// some stack space for the tasks
+    create_task(1, (uint32_t) task_entry, 0xC80000, 0xC00000, false);
+    create_task(2, (uint32_t) task_entry, 0xD80000, 0xD00000, false);
+    create_task(3, (uint32_t) task_entry, 0xE80000, 0xE00000, false);
 
     timer_enabled = true;
     enable_interrupts();
@@ -260,7 +242,7 @@ void kernel_main() {
     // kernel / idle thread
     uint8_t a = 0;
     while (true) {
-        *(VGA_MEMORY + 494) = 0xFA00 | a++;
+        *(VGA_MEMORY) = 0x0900 | a++;
         halt();
     }
 }

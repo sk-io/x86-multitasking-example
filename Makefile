@@ -1,24 +1,28 @@
-CC = i686-elf-gcc # you can use clang too if you dont want to build your own cross compiler
-LD = i686-elf-ld
-CFLAGS = -g -nostdlib -ffreestanding -m32 -c -Wall -Wextra
-LDFLAGS = -g -Tlinker.ld -m elf_i386
+CC = i686-elf-gcc
+LD = i686-elf-gcc
+COMMONFLAGS = -g -ffreestanding -nostdlib -fno-builtin -Wall -Wextra
+CFLAGS = $(COMMONFLAGS)
+LDFLAGS = $(COMMONFLAGS) -Tlinker.ld
 ASFLAGS = -felf32
 
-SOURCES_C = $(patsubst %.c, %.o, $(wildcard *.c))
-SOURCES_ASM = $(patsubst %.asm, %.o, $(wildcard *.asm))
+# clang setup example: (with ldd)
+# CC = clang
+# LD = clang
+# COMMONFLAGS = -g -ffreestanding -nostdlib -fno-builtin --target=i386-none-elf -Wall -Wextra -fno-PIC -fno-PIE
+# CFLAGS = $(COMMONFLAGS)
+# LDFLAGS = $(COMMONFLAGS) -static -Tlinker.ld -z noexecstack -Wl,--build-id=none -fuse-ld=lld
 
-OBJ = $(SOURCES_ASM) $(SOURCES_C)
-BINARY = kernel.bin
+BINARY = multitask.elf
 
 all: $(BINARY)
 
-$(BINARY): $(OBJ)
-	$(LD) $(LDFLAGS) -o $(BINARY) $(OBJ)
+$(BINARY): multitask.o multitask_asm.o
+	$(LD) $(LDFLAGS) -o $@ $^
 
-%.o: %.c
-	$(CC) $(CFLAGS) $< -o $@
+multitask.o: multitask.c
+	$(CC) $(CFLAGS) -c $< -o $@
 
-%.o: %.asm
+multitask_asm.o: multitask.asm
 	nasm $(ASFLAGS) $< -o $@
 
 run: all

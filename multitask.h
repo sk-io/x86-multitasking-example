@@ -50,7 +50,7 @@ typedef struct {
     uint16_t gs, __gs_unused;
     uint16_t ldt_selector, __ldt_sel_unused;
     uint16_t debug_flag, io_map;
-} __attribute__ ((packed)) TSS; // https://wiki.osdev.org/TSS
+} __attribute__((packed)) TSS; // https://wiki.osdev.org/TSS
 
 typedef struct {
     uint16_t isr_low; // ISR(interrupt service routine) address
@@ -65,7 +65,7 @@ typedef struct {
     uint32_t base;
 } __attribute__((packed)) IDTPointer;
 
-// matches the stack of isr_common in kernel.asm
+// matches the stack of isr_common in multitask.asm
 typedef struct {
     // pushed by us:
     uint32_t gs, fs, es, ds;
@@ -76,14 +76,19 @@ typedef struct {
     uint32_t eip, cs, eflags, usermode_esp, usermode_ss;
 } TrapFrame;
 
-// matches the stack of switch_context in kernel.asm
 typedef struct {
-    uint32_t edi;
-    uint32_t esi;
-    uint32_t ebx;
-    uint32_t ebp;
-    uint32_t return_eip;
-} TaskReturnContext;
+	// callee-saved regs
+	uint32_t ebp, edi, esi, ebx;
+
+	// popped by ret in switch_context
+	uint32_t switch_context_return_addr;
+	
+	// popped by us in new_kernel_entry
+	uint32_t data_selector;
+
+	// popped by iret in new_kernel_entry
+    uint32_t eip, cs, eflags, usermode_esp, usermode_ss;
+} NewTaskKernelStack;
 
 typedef struct {
     uint32_t id;
@@ -106,24 +111,24 @@ typedef struct {
     uint32_t kesp_bottom;
 } Task;
 
+// in multitask.asm
+void load_gdt(uint32_t addr);
+void switch_context(Task* from, Task* to);
+void isr_exit();
+void new_task_setup();
+
+// in multitask.c
 extern TSS tss;
 extern Task* current_task;
 extern bool timer_enabled;
 
-// kernel.asm
-void flush_gdt(uint32_t addr);
-void flush_tss();
-void switch_context(Task* old, Task* new);
-void isr_exit();
-
-// kernel.c
 void handle_interrupt(TrapFrame regs);
 void timer_tick();
 void schedule();
 void* memset(uint8_t* dest, uint8_t val, uint32_t len);
 
 static inline void outb(uint16_t port, uint8_t value) {
-    asm volatile ("outb %1, %0" :: "dN" (port), "a" (value));
+    asm("outb %1, %0" :: "dN" (port), "a" (value));
 }
 
 #define halt() asm volatile("hlt")
