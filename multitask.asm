@@ -12,9 +12,9 @@ section .multiboot
 ; ----- Initial Stack -----
 
 section .bss
-stack_bottom:
+stack_max:
 	resb 16384 ; reserve 16 KiB for the initial kernel stack
-stack_top:
+stack_bottom:
 
 ; ----- Boot -----
 
@@ -23,7 +23,7 @@ global _start
 _start:
 	; interrupts are disabled
 
-	mov esp, stack_top
+	mov esp, stack_bottom
 
 	; push ebx ; multiboot info pointer, we don't need it though
 
