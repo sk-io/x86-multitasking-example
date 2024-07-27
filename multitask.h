@@ -114,21 +114,15 @@ typedef struct {
 // in multitask.asm
 void load_gdt(uint32_t addr);
 void switch_context(Task* from, Task* to);
-void isr_exit();
 void new_task_setup();
 
 // in multitask.c
-extern TSS tss;
-extern Task* current_task;
-extern bool timer_enabled;
-
 void handle_interrupt(TrapFrame regs);
-void timer_tick();
 void schedule();
 void* memset(uint8_t* dest, uint8_t val, uint32_t len);
 
 static inline void outb(uint16_t port, uint8_t value) {
-	asm("outb %1, %0" :: "dN" (port), "a" (value));
+	asm("outb %1, %0" :: "dN"(port), "a"(value));
 }
 
 #define halt() asm volatile("hlt")

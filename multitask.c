@@ -7,14 +7,11 @@ GDTPointer gdt_pointer;
 TSS tss;
 
 void set_gdt_entry(uint32_t num, uint32_t base, uint32_t limit, uint8_t access, uint8_t flags) {
-	gdt_entries[num].base_low    = (base & 0xFFFF);
-	gdt_entries[num].base_mid    = (base >> 16) & 0xFF;
-	gdt_entries[num].base_high   = (base >> 24) & 0xFF;
-
-	gdt_entries[num].limit_low   = (limit & 0xFFFF);
-	gdt_entries[num].granularity = (limit >> 16) & 0x0F;
-	
-	gdt_entries[num].granularity |= flags & 0xF0;
+	gdt_entries[num].base_low    = base & 0xFFFF;
+	gdt_entries[num].base_mid    = base >> 16 & 0xFF;
+	gdt_entries[num].base_high   = base >> 24 & 0xFF;
+	gdt_entries[num].limit_low   = limit & 0xFFFF;
+	gdt_entries[num].granularity = (flags & 0xF0) | (limit >> 16 & 0xF);
 	gdt_entries[num].access      = access;
 }
 
@@ -98,7 +95,7 @@ void handle_interrupt(TrapFrame regs) {
 	// print some garbage to the screen
 	*(VGA_MEMORY + 80 + regs.interrupt) = 0xF100 | 'G';
 
-	// check if this is a PIT interrupt
+	// check if its a IRQ
 	if (regs.interrupt >= 32 && regs.interrupt <= 47) {
 		// acknowledge IRQ
 		if (regs.interrupt >= 40) {
@@ -106,8 +103,9 @@ void handle_interrupt(TrapFrame regs) {
 		}
 		outb(0x20, 0x20);
 
-		if (regs.interrupt == 32 && timer_enabled) {
-			timer_tick();
+		// check if this is a PIT interrupt
+		if (regs.interrupt == 32) {
+			schedule();
 		}
 	}
  
@@ -118,11 +116,9 @@ void handle_interrupt(TrapFrame regs) {
 	}
 }
 
-// ----- Timer -----
+// ----- PIT -----
 
-bool timer_enabled = false;
-
-void setup_timer(uint32_t frequency) {
+void setup_pit(uint32_t frequency) {
 	uint32_t divisor = 1193180 / frequency;
 
 	outb(0x43, 0x36);
@@ -132,10 +128,6 @@ void setup_timer(uint32_t frequency) {
 
 	outb(0x40, l);
 	outb(0x40, h);
-}
-
-void timer_tick() {
-	schedule();
 }
 
 // ----- Tasks -----
@@ -227,7 +219,7 @@ void kernel_main() {
 	memset((uint8_t*) 0xB8000, 0, 80 * 25 * sizeof(uint16_t));
 
 	setup_interrupts();
-	setup_timer(1000);
+	setup_pit(1000);
 	setup_tasks();
 
 	// since theres no allocator, we'll just manually designate
@@ -236,7 +228,6 @@ void kernel_main() {
 	create_task(2, (uint32_t) task_entry, 0xD80000, 0xD00000, false);
 	create_task(3, (uint32_t) task_entry, 0xE80000, 0xE00000, false);
 
-	timer_enabled = true;
 	enable_interrupts();
 
 	// kernel / idle thread
