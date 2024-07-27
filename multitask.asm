@@ -27,7 +27,7 @@ _start:
 
 	; push ebx ; multiboot info pointer, we don't need it though
 
-    extern kernel_main
+	extern kernel_main
 	call kernel_main
  
 	cli
@@ -39,67 +39,67 @@ _start:
 
 global load_gdt
 load_gdt:
-    mov eax, [esp + 4]
-    lgdt [eax]
+	mov eax, [esp + 4]
+	lgdt [eax]
 
-    mov ax, 0x10
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
-    mov ss, ax
+	mov ax, 0x10
+	mov ds, ax
+	mov es, ax
+	mov fs, ax
+	mov gs, ax
+	mov ss, ax
 
 	; do a long jump to load CS with correct value
-    jmp 0x08:.load_cs
+	jmp 0x08:.load_cs
 .load_cs:
-    ret
+	ret
 
 ; ----- Interrupts -----
 
 ; gets called for ALL interrupts
 isr_common:
-    ; push registers to match struct TrapFrame (in reverse order)
-    pushad
-    push ds
-    push es
-    push fs
-    push gs
+	; push registers to match struct TrapFrame (in reverse order)
+	pushad
+	push ds
+	push es
+	push fs
+	push gs
 
-    ; load kernel data segment
-    push ebx
-    mov bx, 0x10
-    mov ds, bx
-    mov es, bx
-    mov fs, bx
-    mov gs, bx
-    pop ebx
+	; load kernel data segment
+	push ebx
+	mov bx, 0x10
+	mov ds, bx
+	mov es, bx
+	mov fs, bx
+	mov gs, bx
+	pop ebx
 
-    extern handle_interrupt
-    call handle_interrupt
+	extern handle_interrupt
+	call handle_interrupt
 
-    pop gs
-    pop fs
-    pop es
-    pop ds
-    popad
-    add esp, 8      ; pop error code and interrupt number
-    iret            ; pops (CS, EIP, EFLAGS) and also (SS, ESP) if privilege change occurs
+	pop gs
+	pop fs
+	pop es
+	pop ds
+	popad
+	add esp, 8      ; pop error code and interrupt number
+	iret            ; pops (CS, EIP, EFLAGS) and also (SS, ESP) if privilege change occurs
 
 ; generate isr stubs that jump to isr_common, in order to get a consistent stack frame
 
 %macro ISR_ERROR_CODE 1
 global isr%1
 isr%1:
-    push dword %1   ; interrupt number
-    jmp isr_common
+	push dword %1   ; interrupt number
+	jmp isr_common
 %endmacro
 
 %macro ISR_NO_ERROR_CODE 1
 global isr%1
 isr%1:
-    push dword 0    ; dummy error code to align with TrapFrame
-    push dword %1   ; interrupt number
-    jmp isr_common
+	push dword 0    ; dummy error code to align with TrapFrame
+	push dword %1   ; interrupt number
+	jmp isr_common
 %endmacro
 
 ; exceptions and CPU reserved interrupts 0 - 31
@@ -162,7 +162,7 @@ global isr_redirect_table
 isr_redirect_table:
 %assign i 0
 %rep 48
-    dd isr%+i
+	dd isr%+i
 %assign i i+1
 %endrep
 
@@ -172,8 +172,8 @@ isr_redirect_table:
 ; swaps stack pointer to next task's kernel stack
 global switch_context
 switch_context:
-    mov eax, [esp + 4] ; eax = from
-    mov edx, [esp + 8] ; edx = to
+	mov eax, [esp + 4] ; eax = from
+	mov edx, [esp + 8] ; edx = to
 	
 	; these are the callee-saved registers on x86 according to cdecl
 	; they will change once we go off and execute the other task
@@ -188,9 +188,9 @@ switch_context:
 	push edi
 	push ebp
 
-    ; swap kernel stack pointer and store them
-    mov [eax + 4], esp ; from->kesp = esp
-    mov esp, [edx + 4] ; esp = to->kesp
+	; swap kernel stack pointer and store them
+	mov [eax + 4], esp ; from->kesp = esp
+	mov esp, [edx + 4] ; esp = to->kesp
 	
 	; NewTaskKernelStack will match the stack from here on out.
 
@@ -199,7 +199,7 @@ switch_context:
 	pop esi
 	pop ebx
 
-    ret ; new tasks hijack the return address to new_task_setup
+	ret ; new tasks hijack the return address to new_task_setup
 
 global new_task_setup
 new_task_setup:
